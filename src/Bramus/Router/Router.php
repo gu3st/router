@@ -512,7 +512,7 @@ class Router
                 // The controller class is not available or the class does not have the method $method
             }
         }
-        if($retVal) {
+        if($retVal !== false) {
             $nextFn();
         }
     }
