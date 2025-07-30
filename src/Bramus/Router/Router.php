@@ -47,6 +47,9 @@ class Router
      */
     private $namespace = '';
 
+    /** @var array Context that gets passed into each handler and can be  */
+    private $context = [];
+
     /**
      * Store a before middleware route and a handling function to be executed when accessed using one of the specified methods.
      *
@@ -54,7 +57,7 @@ class Router
      * @param string          $pattern A route pattern such as /about/system
      * @param object|callable $fn      The handling function to be executed
      */
-    public function before($methods, $pattern, $fn)
+    public function before($methods, $pattern, ...$fns)
     {
         $pattern = $this->baseRoute . '/' . trim($pattern, '/');
         $pattern = $this->baseRoute ? rtrim($pattern, '/') : $pattern;
@@ -66,7 +69,7 @@ class Router
         foreach (explode('|', $methods) as $method) {
             $this->beforeRoutes[$method][] = array(
                 'pattern' => $pattern,
-                'fn' => $fn,
+                'fns' => $fns,
             );
         }
     }
@@ -76,9 +79,9 @@ class Router
      *
      * @param string          $methods Allowed methods, | delimited
      * @param string          $pattern A route pattern such as /about/system
-     * @param object|callable $fn      The handling function to be executed
+     * @param array[object|callable] $fn      The handling function to be executed
      */
-    public function match($methods, $pattern, $fn)
+    public function match($methods, $pattern, ...$fns)
     {
         $pattern = $this->baseRoute . '/' . trim($pattern, '/');
         $pattern = $this->baseRoute ? rtrim($pattern, '/') : $pattern;
@@ -86,7 +89,7 @@ class Router
         foreach (explode('|', $methods) as $method) {
             $this->afterRoutes[$method][] = array(
                 'pattern' => $pattern,
-                'fn' => $fn,
+                'fns' => $fns,
             );
         }
     }
@@ -97,9 +100,9 @@ class Router
      * @param string          $pattern A route pattern such as /about/system
      * @param object|callable $fn      The handling function to be executed
      */
-    public function all($pattern, $fn)
+    public function all($pattern, ...$fns)
     {
-        $this->match('GET|POST|PUT|DELETE|OPTIONS|PATCH|HEAD', $pattern, $fn);
+        $this->match('GET|POST|PUT|DELETE|OPTIONS|PATCH|HEAD', $pattern, $fns);
     }
 
     /**
@@ -108,9 +111,9 @@ class Router
      * @param string          $pattern A route pattern such as /about/system
      * @param object|callable $fn      The handling function to be executed
      */
-    public function get($pattern, $fn)
+    public function get($pattern, ...$fns)
     {
-        $this->match('GET', $pattern, $fn);
+        $this->match('GET', $pattern, ...$fns);
     }
 
     /**
@@ -119,9 +122,9 @@ class Router
      * @param string          $pattern A route pattern such as /about/system
      * @param object|callable $fn      The handling function to be executed
      */
-    public function post($pattern, $fn)
+    public function post($pattern, ...$fns)
     {
-        $this->match('POST', $pattern, $fn);
+        $this->match('POST', $pattern, ...$fns);
     }
 
     /**
@@ -130,9 +133,9 @@ class Router
      * @param string          $pattern A route pattern such as /about/system
      * @param object|callable $fn      The handling function to be executed
      */
-    public function patch($pattern, $fn)
+    public function patch($pattern, ...$fns)
     {
-        $this->match('PATCH', $pattern, $fn);
+        $this->match('PATCH', $pattern, ...$fns);
     }
 
     /**
@@ -141,9 +144,9 @@ class Router
      * @param string          $pattern A route pattern such as /about/system
      * @param object|callable $fn      The handling function to be executed
      */
-    public function delete($pattern, $fn)
+    public function delete($pattern, ...$fns)
     {
-        $this->match('DELETE', $pattern, $fn);
+        $this->match('DELETE', $pattern, ...$fns);
     }
 
     /**
@@ -152,9 +155,9 @@ class Router
      * @param string          $pattern A route pattern such as /about/system
      * @param object|callable $fn      The handling function to be executed
      */
-    public function put($pattern, $fn)
+    public function put($pattern, ...$fns)
     {
-        $this->match('PUT', $pattern, $fn);
+        $this->match('PUT', $pattern, ...$fns);
     }
 
     /**
@@ -163,9 +166,9 @@ class Router
      * @param string          $pattern A route pattern such as /about/system
      * @param object|callable $fn      The handling function to be executed
      */
-    public function options($pattern, $fn)
+    public function options($pattern, ...$fns)
     {
-        $this->match('OPTIONS', $pattern, $fn);
+        $this->match('OPTIONS', $pattern, ...$fns);
     }
 
     /**
@@ -443,7 +446,7 @@ class Router
                 }, $matches, array_keys($matches));
 
                 // Call the handling function with the URL parameters if the desired input is callable
-                $this->invoke($route['fn'], $params);
+                $this->invokeMultiple($route['fns'], $params);
 
                 ++$numHandled;
 
@@ -458,10 +461,27 @@ class Router
         return $numHandled;
     }
 
-    private function invoke($fn, $params = array())
+    private function invokeMultiple($fns, $params = []) {
+        if(is_array($fns)) {
+            foreach($fns as $fn) {
+                $next = false;
+                $nextFn = function() use (&$next) { $next = true; };
+                $this->invoke($fn, $params, $nextFn);
+                if(!$next) {
+                    break;
+                }
+            }
+        }
+    }
+
+    private function invoke($fn, $params = array(), $nextFn = null)
     {
+        $retVal = false;
+        if($nextFn = null) {
+            $nextFn = function() {};
+        }
         if (is_callable($fn)) {
-            call_user_func_array($fn, $params);
+            $retVal = call_user_func_array($fn, self::splat([&$this->context, $params]));
         }
 
         // If not, check the existence of special parameters
@@ -479,18 +499,21 @@ class Router
                 // Make sure it's callable
                 if ($reflectedMethod->isPublic() && (!$reflectedMethod->isAbstract())) {
                     if ($reflectedMethod->isStatic()) {
-                        forward_static_call_array(array($controller, $method), $params);
+                        $retVal = forward_static_call_array(array($controller, $method), self::splat([&$this->context, $params]));
                     } else {
                         // Make sure we have an instance, because a non-static method must not be called statically
                         if (\is_string($controller)) {
                             $controller = new $controller();
                         }
-                        call_user_func_array(array($controller, $method), $params);
+                        $retVal = call_user_func_array(array($controller, $method), self::splat([&$this->context, $params]));
                     }
                 }
             } catch (\ReflectionException $reflectionException) {
                 // The controller class is not available or the class does not have the method $method
             }
+        }
+        if($retVal) {
+            $nextFn();
         }
     }
 
@@ -537,5 +560,20 @@ class Router
     public function setBasePath($serverBasePath)
     {
         $this->serverBasePath = $serverBasePath;
+    }
+
+    private function splat($array = array()) {
+        $ret = [];
+        foreach($array as $v) {
+            if(is_array($v)){
+                foreach($v as $v2) {
+                    $ret[] = $v2;
+                }
+            }
+            else {
+                $ret[] = $v;
+            }
+        }
+        return $ret;
     }
 }
