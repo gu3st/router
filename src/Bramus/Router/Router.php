@@ -1,11 +1,12 @@
 <?php
-
 /**
  * @author      Bram(us) Van Damme <bramus@bram.us>
  * @copyright   Copyright (c), 2013 Bram(us) Van Damme
  * @license     MIT public license
  */
 namespace Bramus\Router;
+
+require_once(__DIR__ . '/Context.php');
 
 /**
  * Class Router.
@@ -48,7 +49,7 @@ class Router
     private $namespace = '';
 
     /** @var array Context that gets passed into each handler and can be  */
-    private $context = [];
+    private $data = [];
 
     /**
      * Store a before middleware route and a handling function to be executed when accessed using one of the specified methods.
@@ -354,24 +355,9 @@ class Router
 
               // is fallback route match?
               if ($is_match) {
+                $params = $this->getParams($matches);
 
-                // Rework matches to only contain the matches, not the orig string
-                $matches = array_slice($matches, 1);
-
-                // Extract the matched URL parameters (and only the parameters)
-                $params = array_map(function ($match, $index) use ($matches) {
-
-                  // We have a following parameter: take the substring from the current param position until the next one's position (thank you PREG_OFFSET_CAPTURE)
-                  if (isset($matches[$index + 1]) && isset($matches[$index + 1][0]) && is_array($matches[$index + 1][0])) {
-                    if ($matches[$index + 1][0][1] > -1) {
-                      return trim(substr($match[0][0], 0, $matches[$index + 1][0][1] - $match[0][1]), '/');
-                    }
-                  } // We have no following parameters: return the whole lot
-
-                  return isset($match[0][0]) && $match[0][1] != -1 ? trim($match[0][0], '/') : null;
-                }, $matches, array_keys($matches));
-
-                $this->invoke($route_callable);
+                $this->invokeMultiple([$route_callable], $params);
 
                 ++$numHandled;
               }
@@ -398,7 +384,7 @@ class Router
     private function patternMatches($pattern, $uri, &$matches, $flags)
     {
       // Replace all curly braces matches {} into word patterns (like Laravel)
-      $pattern = preg_replace('/\/{(.*?)}/', '/(.*?)', $pattern);
+      $pattern = preg_replace('/\/{(.*?)}/', '/(?<$1>.*?)', $pattern);
 
       // we may have a match!
       return boolval(preg_match_all('#^' . $pattern . '$#', $uri, $matches, PREG_OFFSET_CAPTURE));
@@ -428,22 +414,7 @@ class Router
 
             // is there a valid match?
             if ($is_match) {
-
-                // Rework matches to only contain the matches, not the orig string
-                $matches = array_slice($matches, 1);
-
-                // Extract the matched URL parameters (and only the parameters)
-                $params = array_map(function ($match, $index) use ($matches) {
-
-                    // We have a following parameter: take the substring from the current param position until the next one's position (thank you PREG_OFFSET_CAPTURE)
-                    if (isset($matches[$index + 1]) && isset($matches[$index + 1][0]) && is_array($matches[$index + 1][0])) {
-                        if ($matches[$index + 1][0][1] > -1) {
-                            return trim(substr($match[0][0], 0, $matches[$index + 1][0][1] - $match[0][1]), '/');
-                        }
-                    } // We have no following parameters: return the whole lot
-
-                    return isset($match[0][0]) && $match[0][1] != -1 ? trim($match[0][0], '/') : null;
-                }, $matches, array_keys($matches));
+                $params = $this->getParams($matches);
 
                 // Call the handling function with the URL parameters if the desired input is callable
                 $this->invokeMultiple($route['fns'], $params);
@@ -462,26 +433,21 @@ class Router
     }
 
     private function invokeMultiple($fns, $params = []) {
+        $context = new Context($params, $this->data);
         if(is_array($fns)) {
             foreach($fns as $fn) {
-                $next = false;
-                $nextFn = function() use (&$next) { $next = true; };
-                $this->invoke($fn, $params, $nextFn);
-                if(!$next) {
+                $this->invoke($fn, $context);
+                if($context->getStop()) {
                     break;
                 }
             }
         }
     }
 
-    private function invoke($fn, $params = array(), $nextFn = null)
+    private function invoke($fn, $context)
     {
-        $retVal = false;
-        if($nextFn = null) {
-            $nextFn = function() {};
-        }
         if (is_callable($fn)) {
-            $retVal = call_user_func_array($fn, self::splat([&$this->context, $params]));
+            call_user_func_array($fn, $context);
         }
 
         // If not, check the existence of special parameters
@@ -499,21 +465,18 @@ class Router
                 // Make sure it's callable
                 if ($reflectedMethod->isPublic() && (!$reflectedMethod->isAbstract())) {
                     if ($reflectedMethod->isStatic()) {
-                        $retVal = forward_static_call_array(array($controller, $method), self::splat([&$this->context, $params]));
+                       forward_static_call_array(array($controller, $method), $context);
                     } else {
                         // Make sure we have an instance, because a non-static method must not be called statically
                         if (\is_string($controller)) {
                             $controller = new $controller();
                         }
-                        $retVal = call_user_func_array(array($controller, $method), self::splat([&$this->context, $params]));
+                        call_user_func_array(array($controller, $method), $context);
                     }
                 }
             } catch (\ReflectionException $reflectionException) {
                 // The controller class is not available or the class does not have the method $method
             }
-        }
-        if($retVal !== false) {
-            $nextFn();
         }
     }
 
@@ -560,6 +523,32 @@ class Router
     public function setBasePath($serverBasePath)
     {
         $this->serverBasePath = $serverBasePath;
+    }
+
+    private function getParams($matches = []) {
+
+        // Rework matches to only contain the matches, not the orig string
+        $matches = array_slice($matches, 1);
+        // make keys orderly
+        $keys = array_keys($matches);
+        natcasesort($keys);
+        $keys = array_values($keys);
+
+        foreach($keys as $key) {
+            $match = $matches[$key];
+            if(!is_numeric($key)){
+                $params[strtolower($key)] = $match[0][0];
+                continue;
+            }
+            if (isset($matches[$key + 1]) && isset($matches[$key + 1][0]) && is_array($matches[$key + 1][0])) {
+                if ($matches[$key + 1][0][1] > -1) {
+                    $params[$key] = trim(substr($match[0][0], 0, $matches[$key + 1][0][1] - $match[0][1]), '/');
+                    continue;
+                }
+            }
+            $params[$key] = isset($match[0][0]) && $match[0][1] != -1 ? trim($match[0][0], '/') : null;
+        }
+        return $params;
     }
 
     private function splat($array = array()) {
