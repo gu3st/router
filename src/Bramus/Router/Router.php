@@ -537,7 +537,7 @@ class Router
         foreach($keys as $key) {
             $match = $matches[$key];
             if(!is_numeric($key)){
-                $params[strtolower($key)] = $match[0][0];
+                $params[$key] = $match[0][0];
                 continue;
             }
             if (isset($matches[$key + 1]) && isset($matches[$key + 1][0]) && is_array($matches[$key + 1][0])) {
