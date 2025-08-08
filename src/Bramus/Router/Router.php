@@ -447,7 +447,7 @@ class Router
     private function invoke($fn, $context)
     {
         if (is_callable($fn)) {
-            call_user_func_array($fn, $context);
+            call_user_func_array($fn, [$context]);
         }
 
         // If not, check the existence of special parameters
@@ -465,13 +465,13 @@ class Router
                 // Make sure it's callable
                 if ($reflectedMethod->isPublic() && (!$reflectedMethod->isAbstract())) {
                     if ($reflectedMethod->isStatic()) {
-                       forward_static_call_array(array($controller, $method), $context);
+                       forward_static_call_array([$controller, $method], [$context]);
                     } else {
                         // Make sure we have an instance, because a non-static method must not be called statically
                         if (\is_string($controller)) {
                             $controller = new $controller();
                         }
-                        call_user_func_array(array($controller, $method), $context);
+                        call_user_func_array(array($controller, $method), [$context]);
                     }
                 }
             } catch (\ReflectionException $reflectionException) {
@@ -526,7 +526,7 @@ class Router
     }
 
     private function getParams($matches = []) {
-
+        $params = [];
         // Rework matches to only contain the matches, not the orig string
         $matches = array_slice($matches, 1);
         // make keys orderly
