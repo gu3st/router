@@ -364,7 +364,7 @@ class Router
             }
         }
         if (($numHandled == 0) && (isset($this->notFoundCallback['/']))) {
-            $this->invoke($this->notFoundCallback['/']);
+            $this->invoke($this->notFoundCallback['/'], $this->contextFactory());
         } elseif ($numHandled == 0) {
             header($_SERVER['SERVER_PROTOCOL'] . ' 404 Not Found');
         }
@@ -433,7 +433,7 @@ class Router
     }
 
     private function invokeMultiple($fns, $params = []) {
-        $context = new Context($params, $this->data);
+        $context = $this->contextFactory($params);
         if(is_array($fns)) {
             foreach($fns as $fn) {
                 $this->invoke($fn, $context);
@@ -443,6 +443,7 @@ class Router
             }
         }
     }
+
 
     private function invoke($fn, $context)
     {
@@ -523,6 +524,10 @@ class Router
     public function setBasePath($serverBasePath)
     {
         $this->serverBasePath = $serverBasePath;
+    }
+
+    private function contextFactory($params = []) {
+        return new Context($params, $this->data);
     }
 
     private function getParams($matches = []) {
